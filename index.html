@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Steve, Minecraft: 10 niveluri</title>
+<style>
+  :root{
+    --noapte:#1b1428; --panou:#261d38; --linie:#3b2f55;
+    --ink:#f4ecdc; --stins:#b3a6c9; --aur:#f2b632; --rosu:#b3202a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--noapte);color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif}
+  body{display:flex;justify-content:center;padding:14px}
+  .wrap{width:100%;max-width:960px}
+  header{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:4px 16px;margin:0 2px 10px}
+  h1{margin:0;font-size:24px;color:var(--aur);letter-spacing:.02em}
+  .hint{font-size:13px;color:var(--stins)}
+  .stage{position:relative;width:100%;aspect-ratio:5/3;border-radius:14px;overflow:hidden;background:#000;
+    box-shadow:0 14px 44px rgba(0,0,0,.55),0 0 0 2px var(--linie);touch-action:none;user-select:none;-webkit-user-select:none}
+  canvas{display:block;width:100%;height:100%}
+  .touch{position:absolute;inset:0;pointer-events:none;display:none}
+  .touch.on{display:block}
+  .tbtn{position:absolute;bottom:4%;width:13%;max-width:84px;aspect-ratio:1;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:clamp(16px,4vw,28px);color:#fff;
+    background:rgba(255,255,255,.13);border:2px solid rgba(255,255,255,.35);pointer-events:auto;touch-action:none}
+  .tbtn.down{background:rgba(242,182,50,.45)}
+  details{margin-top:14px;background:var(--panou);border:1px solid var(--linie);border-radius:10px;padding:10px 14px}
+  summary{cursor:pointer;font-weight:bold;color:var(--aur)}
+  summary:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--aur);outline-offset:2px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px 24px;margin-top:12px}
+  .row{display:grid;grid-template-columns:1fr 64px;gap:2px 8px;font-size:13px;align-items:center}
+  .row output{text-align:right;color:var(--aur);font-variant-numeric:tabular-nums}
+  .row input{grid-column:1/3;width:100%;accent-color:var(--rosu)}
+  .info{margin-top:12px;font-size:13px;color:var(--stins)}
+  .actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  button{background:var(--linie);color:var(--ink);border:0;border-radius:8px;padding:7px 12px;font:inherit;font-size:13px;cursor:pointer}
+  button:hover{background:#4a3c68}
+  pre{margin:10px 0 0;padding:8px 10px;background:#120d1c;border-radius:8px;font-size:12px;white-space:pre-wrap;word-break:break-all;color:var(--stins)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Steve</h1>
+    <span class="hint">Click pe joc dacă tastele nu răspund. P pauză, M sunet, R reîncepe nivelul, N/B nivel următor/anterior.</span>
+  </header>
+
+  <div class="stage" id="stage">
+    <canvas id="game" width="800" height="480"></canvas>
+    <div class="touch" id="touch">
+      <div class="tbtn" data-k="left" style="left:3%">◀</div>
+      <div class="tbtn" data-k="right" style="left:18%">▶</div>
+      <div class="tbtn" data-k="fire" style="right:18%">⚔️</div>
+      <div class="tbtn" data-k="jump" style="right:3%">▲</div>
+    </div>
+  </div>
+
+  <details>
+    <summary>Reglaje pentru fizică</summary>
+    <div class="grid" id="grid"></div>
+    <div class="info" id="physInfo"></div>
+    <div class="actions">
+      <button id="resetPhys">Revino la valorile inițiale</button>
+      <button id="copyPhys">Copiază valorile</button>
+    </div>
+    <pre id="physOut"></pre>
+  </details>
+  <details>
+    <summary>Setări joc</summary>
+    <div class="actions">
+      <button id="godModeBtn" type="button">GOD Mode: OPRIT</button>
+    </div>
+    <div class="info" id="godInfo">GOD Mode: invincibilitate + arme infinite.</div>
+  </details>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ============================================================
+//  Constante și fizică
+// ============================================================
+const TILE = 32, W = 160, H = 15, VW = 800, VH = 480;
+const STEP = 1 / 120, MAXFALL = 900, MAXH = 3;
+const SOLID = new Set(['#', '=', 'B', 'P', 'H', 'N', 'F', 'u']);
+
+const DEFAULTS = {
+  gravity: 2200, jump: 820, jumpCut: 0.45, runMax: 260, accel: 1800,
+  friction: 2400, airAccel: 1300, glideFall: 110, glideTime: Infinity,
+  coyote: 0.10, buffer: 0.12
+};
+const PHYS = { ...DEFAULTS };
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const hash = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ============================================================
+//  Stare
+// ============================================================
+let tiles, enemies, items, flames, particles, popups, floaters, bumps, checkpoint, nest, player, spawn;
+let coins = 0, totalCoins = 0, hearts = MAXH, deaths = 0, playTime = 0;
+let state = 'title', paused = false, deadT = 0, winT = 0, anim = 0, shakeT = 0;
+let toast = null, gotWeaponHint = false, godMode = false;
+const cam = { x: 0, look: 60 };
+let CX = 0;
+
+// ============================================================
+//  Nivelul 1: Satul de sub munte (stil Minecraft)
+//  # iarbă/pământ   = piatră   B Lucky Block cu bănuți   P Lucky Block cu arc
+//  H Lucky Block cu inimă   N Lucky Block cu sabie de netherite
+//  F Lucky Block cu sabie de fier   u bloc spart   - scândură   ^ cactus
+// ============================================================
+const SIGNS = [
+  { tx: 1,  ty: 4, d: '← → mergi, SPAȚIU sari (ține apăsat ca să sari mai sus)', m: '◀ ▶ mergi, ▲ sari (ține apăsat ca să sari mai sus)' },
+  { tx: 9,  ty: 7, d: 'Lovește Lucky Block-urile de dedesubt', m: 'Lovește Lucky Block-urile de dedesubt' },
+  { tx: 17, ty: 8, d: 'Sari pe zombi ca să-i învingi', m: 'Sari pe zombi ca să-i învingi' },
+  { tx: 34, ty: 5, d: 'Ține apăsat SĂRITURA în aer ca să planezi cu Elytra', m: 'Ține apăsat ▲ în aer ca să planezi cu Elytra' },
+];
+
+function buildLevel() {
+  const g = [];
+  for (let y = 0; y < H; y++) g.push(new Array(W).fill('.'));
+  const fill = (x1, y1, x2, y2, c) => {
+    for (let y = y1; y <= y2; y++) for (let x = x1; x <= x2; x++)
+      if (x >= 0 && x < W && y >= 0 && y < H) g[y][x] = c;
+  };
+  const ground = (x1, x2, top = 13) => fill(x1, top, x2, H - 1, '#');
+  const sp = [];
+  const S = (type, x, y) => sp.push({ type, x, y });
+  const coinsAt = list => list.forEach(([x, y]) => S('coin', x, y));
+
+  // Poiana
+  ground(0, 22); S('player', 3, 12);
+  coinsAt([[7, 10], [8, 10], [9, 10]]);
+  g[9][12] = 'B'; g[9][13] = 'F'; g[9][14] = 'B';
+  S('spiridus', 19, 12);
+
+  // Pietrele și prima râpă (cere planare)
+  ground(27, 45);
+  fill(30, 10, 33, 10, '='); coinsAt([[30, 8], [31, 8], [32, 8], [33, 8]]);
+  S('spiridus', 36, 12); S('spiridus', 40, 12);
+  fill(43, 12, 45, 12, '='); fill(44, 11, 45, 11, '='); fill(45, 10, 45, 10, '=');
+  coinsAt([[48, 9], [49, 8], [50, 8], [51, 8], [52, 9]]);
+
+  // Dealul cu țepi
+  ground(54, 76);
+  fill(59, 11, 64, 14, '#'); coinsAt([[60, 9], [61, 9], [62, 9], [63, 9]]);
+  S('spiridus', 56, 12);
+  g[9][67] = 'H'; S('liliac', 69, 8);
+  fill(71, 12, 73, 12, '^'); coinsAt([[71, 9], [72, 9], [73, 9]]);
+  fill(79, 10, 81, 10, '-'); coinsAt([[79, 8], [80, 8], [81, 8]]);
+
+  // Fântâna (punct de salvare)
+  ground(84, 110); S('checkpoint', 87, 12);
+  S('spiridus', 93, 12); S('spiridus', 97, 12); S('spiridus', 100, 12);
+  g[9][95] = 'B'; g[9][96] = 'N';
+  fill(104, 9, 105, 12, '='); coinsAt([[104, 7], [105, 7]]);
+  fill(113, 10, 114, 10, '='); fill(117, 9, 117, 9, '='); coinsAt([[113, 8], [117, 7]]);
+  S('liliac', 116, 6);
+
+  // Spre cuib
+  ground(120, 140);
+  g[9][123] = 'P';
+  fill(127, 10, 131, 14, '#'); S('spiridus', 129, 9); coinsAt([[128, 8], [130, 8]]);
+  fill(133, 12, 134, 12, '^');
+  fill(136, 12, 140, 12, '='); fill(137, 11, 140, 11, '='); fill(138, 10, 140, 10, '='); fill(139, 9, 140, 9, '=');
+  coinsAt([[142, 7], [143, 6], [144, 7]]);
+  ground(145, 159); S('liliac', 149, 8); S('nest', 153, 12);
+
+  return { g, sp };
+}
+
+
+// ============================================================
+//  Cele 10 niveluri: teme + generator
+// ============================================================
+const NLEV = 10;
+let level = 0;
+const TH0 = { n: 'Satul de sub munte', sky: ['#5c9bf0', '#a9d4f5', '#dff0f5'], sun: '#fff3b0', r1: '#4f8a3a', r2: '#3d7530', pn: '#245c2e',
+  d: ['#8a5a34', '#6e4726', '#9c7247'], g: ['#4f9a34', '#6cc046', '#5aa93c'] };
+const THEMES = [TH0,
+  { n: 'Pădurea de stejar', sky: ['#3a6e8f', '#7fb7a0', '#cfe8c8'], sun: '#ffe9a0', r1: '#2f6b3a', r2: '#235a30', pn: '#163f22', d: ['#6b4a2c', '#553a20', '#7d5a36'], g: ['#2f8a3c', '#4fb04e', '#3f9c44'] },
+  { n: 'Savana', sky: ['#e8913a', '#f5c46e', '#fbe6b4'], sun: '#fff7cc', r1: '#b58a3a', r2: '#9a7430', pn: '#7a5c26', d: ['#9a6a38', '#7d5428', '#b07c44'], g: ['#c8b04a', '#e0cc66', '#b89c3c'] },
+  { n: 'Deșertul', sky: ['#e8a24a', '#f5cf8a', '#fbeac4'], sun: '#fffbe0', r1: '#d9a85a', r2: '#c4944a', pn: '#a87a3a', d: ['#d9b878', '#bf9c5c', '#e6ca8c'], g: ['#e8cf8e', '#f4e0a4', '#d8bc78'] },
+  { n: 'Tundra înzăpezită', sky: ['#8fb4d8', '#c9ddee', '#f2f7fb'], sun: '#ffffff', r1: '#9db4c8', r2: '#7f9ab2', pn: '#4f6e86', d: ['#7a6a5a', '#605246', '#8e7d6a'], g: ['#e6eff6', '#ffffff', '#cfdde8'] },
+  { n: 'Peștera de cristal', sky: ['#1a1530', '#2a2250', '#3a2f6a'], sun: '#9ae8e0', r1: '#2c2a5a', r2: '#231f48', pn: '#181438', d: ['#3a3458', '#2c2744', '#4a4270'], g: ['#2fa8a0', '#52d0c8', '#3fbab2'], stars: 1 },
+  { n: 'Mlaștina', sky: ['#4a5a3a', '#7a8a5a', '#aab58a'], sun: '#e8e8b0', r1: '#4a5e2a', r2: '#3a4c22', pn: '#2a3a1a', d: ['#5a4a30', '#483a24', '#6a583a'], g: ['#4a6a2a', '#63883a', '#557a30'] },
+  { n: 'Muntele de lavă', sky: ['#3a0f0f', '#7a2a14', '#c25a1e'], sun: '#ffb04a', r1: '#4a2020', r2: '#381818', pn: '#2a1010', d: ['#3a2020', '#2c1818', '#4c2c2c'], g: ['#7a3a2a', '#a8502e', '#8e4430'] },
+  { n: 'Cerul de noapte', sky: ['#0b0a24', '#1d1a4a', '#3a2f70'], sun: '#e8ecff', r1: '#1c2048', r2: '#151838', pn: '#0e1028', d: ['#4a3a5a', '#3a2c48', '#5a486c'], g: ['#3a6a8a', '#5a94b8', '#4a80a2'], stars: 1 },
+  { n: 'Nether, nivelul final', sky: ['#3a0608', '#6a0f12', '#a02418'], sun: '#ff8a3a', r1: '#5a1216', r2: '#44090c', pn: '#300608', d: ['#4a1014', '#380c10', '#5c181c'], g: ['#7a1c20', '#a82a2a', '#8e2226'], stars: 1 },
+];
+const TH = () => THEMES[level];
+
+function buildGen(n) {
+  const g = []; for (let y = 0; y < H; y++) g.push(new Array(W).fill('.'));
+  const fill = (x1, y1, x2, y2, c) => { for (let y = y1; y <= y2; y++) for (let x = x1; x <= x2; x++) if (x >= 0 && x < W && y >= 0 && y < H) g[y][x] = c; };
+  const ground = (x1, x2) => fill(x1, 13, x2, H - 1, '#');
+  const sp = [], S = (type, x, y) => sp.push({ type, x, y });
+  const coinsAt = l => l.forEach(([x, y]) => S('coin', x, y));
+  let seed = n * 7919 + 17; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const ri = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+  const SPECIAL = { 0: 'BPB', 2: 'BFB', 4: 'BHB', 7: 'BHB' }; if (n >= 6) SPECIAL[5] = 'BNB';
+  ground(0, 14); S('player', 3, 12); coinsAt([[7, 10], [8, 10], [9, 10]]);
+  let x = 17, i = 0, cp = false;
+  while (x < 136) {
+    const k = ri(0, 4), run = k === 1 ? ri(9, 10) : ri(6, 9), s = x + 3;
+    ground(x, x + run - 1);
+    if (SPECIAL[i]) { for (let j = 0; j < 3; j++) g[9][s + j] = SPECIAL[i][j]; if (n >= 3) S('spiridus', s + 5, 12); }
+    else if (!cp && x > 70) { S('checkpoint', s, 12); cp = true; }
+    else if (k === 0) { const c = Math.min(3, 1 + (n / 3 | 0)); for (let j = 0; j < c; j++) S('spiridus', s + j * 2, 12); }
+    else if (k === 1) { const w = Math.min(3, 1 + (n / 3 | 0)); fill(x + 2, 12, x + 1 + w, 12, '^'); for (let j = 0; j < w; j++) S('coin', x + 2 + j, 9); }
+    else if (k === 2) { fill(s, 11, s + 1, 12, '='); coinsAt([[s, 9], [s + 1, 9]]); if (n >= 5) S('spiridus', s + 4, 12); }
+    else if (k === 3) { fill(s - 1, 9, s + 2, 9, '='); coinsAt([[s - 1, 7], [s, 7], [s + 1, 7], [s + 2, 7]]); if (n >= 2) S('liliac', s + 1, 5); }
+    else { coinsAt([[s, 10], [s + 1, 9], [s + 2, 10]]); S('spiridus', s + 4, 12); if (n >= 4) S('liliac', s + 2, 6); }
+    const gw = Math.min(7, ri(2, 2 + Math.ceil(n / 2)));
+    if (gw >= 4 && n >= 3 && rnd() < 0.6) { fill(x + run + 1, 10, x + run + gw - 2, 10, '-'); coinsAt([[x + run + 1, 8], [x + run + gw - 2, 8]]); }
+    x += run + gw; i++;
+  }
+  ground(Math.min(x, 146), W - 1); S('nest', 153, 12); S('liliac', 149, 8);
+  return { g, sp };
+}
+
+function nextLevel() {
+  const w = level === NLEV - 1 ? 'none' : player.weapon;
+  level = (level + 1) % NLEV; resetLevel();
+  player.weapon = godMode ? persistentGodWeapon() : w; state = 'play';
+}
+
+function resetLevel() {
+  const L = level === 0 ? buildLevel() : buildGen(level);
+  checkpoint = null;
+  tiles = L.g;
+  enemies = []; items = []; flames = []; particles = []; popups = []; floaters = []; bumps = [];
+  coins = 0; hearts = MAXH; deaths = 0; playTime = 0; totalCoins = 0; toast = null;
+  for (const s of L.sp) {
+    const px = s.x * TILE, fy = (s.y + 1) * TILE;
+    if (s.type === 'player') spawn = { x: px + 5, y: fy - 32 };
+    else if (s.type === 'coin') { items.push({ type: 'coin', x: px + 8, y: s.y * TILE + 6, w: 16, h: 20, t: 0 }); totalCoins++; }
+    else if (s.type === 'spiridus') enemies.push({ type: 'spiridus', x: px + 4, y: fy - 24, w: 24, h: 24, vx: 0, vy: 0, dir: -1, t: 0, active: false });
+    else if (s.type === 'liliac') enemies.push({ type: 'liliac', x: px + 3, y: s.y * TILE + 6, baseX: px + 3, baseY: s.y * TILE + 6, w: 26, h: 20, vx: 0, vy: 0, dir: -1, t: hash(s.x) * 6, active: false });
+    else if (s.type === 'checkpoint') checkpoint = { cx: px + 16, fy, active: false };
+    else if (s.type === 'nest') nest = { cx: px + 16, fy };
+  }
+  for (const row of tiles) for (const t of row) if (t === 'B') totalCoins++;
+  player = makePlayer();
+  if (godMode) player.weapon = persistentGodWeapon();
+  cam.x = 0; cam.look = 60;
+}
+
+function makePlayer() {
+  return {
+    x: spawn.x, y: spawn.y, w: 22, h: 32, vx: 0, vy: 0, prevY: spawn.y, face: 1,
+    onGround: false, coyote: 0, buffer: 0, jumping: false, gliding: false,
+    glideLeft: Infinity, weapon: 'none', fireCd: 0, swingT: 0, inv: 0, hurtT: 0, land: 0, anim: 0
+  };
+}
+
+function respawn(keepWeapon) {
+  const w = godMode ? persistentGodWeapon() : keepWeapon;
+  player = makePlayer();
+  player.weapon = w;
+  player.inv = 1.0;
+  flames = [];
+  cam.look = 60;
+  cam.x = clamp(player.x + player.w / 2 - VW / 2 + 60, 0, W * TILE - VW);
+}
+
+// ============================================================
+//  Coliziuni cu dalele
+// ============================================================
+function tileAt(tx, ty) {
+  if (ty < 0 || ty >= H) return '.';
+  if (tx < 0 || tx >= W) return '#';
+  return tiles[ty][tx];
+}
+function isSolid(tx, ty) {
+  if (tx < 0 || tx >= W) return true;
+  if (ty < 0 || ty >= H) return false;
+  return SOLID.has(tiles[ty][tx]);
+}
+
+function moveX(b, dx) {
+  if (!dx) return false;
+  b.x += dx;
+  const top = Math.floor(b.y / TILE), bot = Math.floor((b.y + b.h - 0.01) / TILE);
+  if (dx > 0) {
+    const tx = Math.floor((b.x + b.w - 0.01) / TILE);
+    for (let ty = top; ty <= bot; ty++) if (isSolid(tx, ty)) { b.x = tx * TILE - b.w; b.vx = 0; return true; }
+  } else {
+    const tx = Math.floor(b.x / TILE);
+    for (let ty = top; ty <= bot; ty++) if (isSolid(tx, ty)) { b.x = (tx + 1) * TILE; b.vx = 0; return true; }
+  }
+  return false;
+}
+
+function moveY(b, dy) {
+  if (!dy) return null;
+  const prevBottom = b.y + b.h;
+  b.y += dy;
+  const l = Math.floor(b.x / TILE), r = Math.floor((b.x + b.w - 0.01) / TILE);
+  if (dy > 0) {
+    const ty = Math.floor((b.y + b.h - 0.01) / TILE);
+    for (let tx = l; tx <= r; tx++) {
+      const t = tileAt(tx, ty);
+      if (SOLID.has(t) || (t === '-' && prevBottom <= ty * TILE + 0.01)) {
+        b.y = ty * TILE - b.h; b.vy = 0; return { floor: true };
+      }
+    }
+  } else {
+    const ty = Math.floor(b.y / TILE);
+    let best = null, bd = 1e9;
+    for (let tx = l; tx <= r; tx++) {
+      if (isSolid(tx, ty)) {
+        const d = Math.abs(tx * TILE + 16 - (b.x + b.w / 2));
+        if (d < bd) { bd = d; best = tx; }
+      }
+    }
+    if (best !== null) { b.y = (ty + 1) * TILE; b.vy = 0; return { ceil: true, tx: best, ty }; }
+  }
+  return null;
+}
+
+// ============================================================
+//  Efecte
+// ============================================================
+function part(x, y, vx, vy, life, color, size, grav) {
+  if (particles.length > 500) return;
+  particles.push({ x, y, vx, vy, life, max: life, color, size, grav: grav || 0 });
+}
+function dust(p, n) {
+  for (let i = 0; i < n; i++)
+    part(p.x + p.w / 2 + (Math.random() - .5) * 16, p.y + p.h - 2, (Math.random() - .5) * 120, -Math.random() * 60, 0.35, '#d9c7a6', 3, 200);
+}
+function floater(text, x, y) { floaters.push({ text, x, y, life: 0.8 }); }
+function showToast(msg, dur = 2.4) { toast = { msg, t: dur, max: dur }; }
+
+// ============================================================
+//  Sunet (WebAudio, generat, fără fișiere)
+// ============================================================
+let AC = null, muted = false, noiseBuf = null;
+function initAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    const n = Math.floor(AC.sampleRate * 0.5);
+    noiseBuf = AC.createBuffer(1, n, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { AC = null; }
+}
+function tone(f1, f2, dur, type, vol, delay = 0) {
+  const t0 = AC.currentTime + delay;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f1, t0);
+  if (f2 && f2 !== f1) o.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(AC.destination);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+function noise(dur, freq, vol, delay = 0) {
+  const t0 = AC.currentTime + delay;
+  const s = AC.createBufferSource(); s.buffer = noiseBuf;
+  const f = AC.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(freq, t0); f.Q.value = 0.8;
+  const g = AC.createGain(); g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  s.connect(f); f.connect(g); g.connect(AC.destination);
+  s.start(t0); s.stop(t0 + dur + 0.02);
+}
+function sfx(n) {
+  if (!AC || muted) return;
+  switch (n) {
+    case 'jump': tone(220, 440, 0.16, 'triangle', 0.12); break;
+    case 'coin': tone(1320, 1320, 0.05, 'triangle', 0.10); tone(1760, 2200, 0.16, 'sine', 0.08, 0.045); break;
+    case 'stomp': tone(180, 70, 0.14, 'sine', 0.25); noise(0.08, 800, 0.12); break;
+    case 'hurt': tone(420, 110, 0.3, 'sawtooth', 0.08); break;
+    case 'fire': noise(0.22, 1400, 0.22); tone(160, 90, 0.2, 'sawtooth', 0.03); break;
+    case 'puff': noise(0.12, 600, 0.08); break;
+    case 'power': [392, 494, 587, 784].forEach((f, i) => tone(f, f, 0.12, 'triangle', 0.1, i * 0.07)); break;
+    case 'bonk': tone(140, 100, 0.08, 'square', 0.05); break;
+    case 'reveal': tone(300, 600, 0.25, 'triangle', 0.08); break;
+    case 'heart': tone(660, 990, 0.2, 'sine', 0.1); break;
+    case 'kill': tone(500, 200, 0.15, 'square', 0.05); break;
+    case 'checkpoint': tone(784, 784, 0.35, 'sine', 0.1); tone(1175, 1175, 0.5, 'sine', 0.08, 0.12); break;
+    case 'win': [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tone(f, f, 0.18, 'triangle', 0.1, i * 0.11)); break;
+  }
+}
+
+// ============================================================
+//  Logică de joc
+// ============================================================
+function hurt(fromX) {
+  const p = player;
+  if (godMode || p.inv > 0 || state !== 'play') return;
+  hearts--; p.inv = 1.3; p.hurtT = 0.25;
+  p.vx = (p.x + p.w / 2 < fromX ? -1 : 1) * 230; p.vy = -430;
+  p.jumping = false; p.onGround = false;
+  shakeT = 0.25; sfx('hurt');
+  for (let i = 0; i < 8; i++)
+    part(p.x + p.w / 2, p.y + p.h / 2, (Math.random() - .5) * 260, (Math.random() - .8) * 260, 0.5, '#ffd0a0', 3, 600);
+  if (hearts <= 0) { hearts = 0; deaths++; state = 'dead'; deadT = 0; p.vy = -560; p.vx = 0; }
+}
+
+function fall() {
+  if (godMode) {
+    respawn(persistentGodWeapon());
+    return;
+  }
+  hearts--; deaths++; shakeT = 0.2; sfx('hurt');
+  if (hearts <= 0) { hearts = 0; state = 'dead'; deadT = 0; }
+  else respawn('none');
+}
+
+function persistentGodWeapon() {
+  // GOD Mode keeps a top-tier weapon after respawn and prevents weapon loss.
+  return 'netherite';
+}
+
+function collectCoin(x, y) {
+  coins++; sfx('coin');
+  for (let i = 0; i < 6; i++) part(x, y, (Math.random() - .5) * 140, (Math.random() - .5) * 140, 0.35, '#ffe27a', 2, 0);
+}
+
+function killEnemy(e, how, fromX) {
+  e.dead = true; e.how = how; e.deadT = 0;
+  if (how === 'flip') { e.vy = -380; e.vx = (e.x + e.w / 2 < fromX ? -1 : 1) * 90; sfx('kill'); }
+  for (let i = 0; i < 10; i++)
+    part(e.x + e.w / 2, e.y + e.h / 2, (Math.random() - .5) * 220, (Math.random() - .7) * 220, 0.45,
+      how === 'flip' ? '#ffb347' : '#e9e2f5', 3, 500);
+}
+
+function hitBlock(tx, ty) {
+  if (tx < 0 || tx >= W) return;
+  const t = tiles[ty][tx];
+  if (t === '#' || t === '=') {
+    sfx('bonk');
+    for (let i = 0; i < 3; i++)
+      part(tx * TILE + 16 + (Math.random() - .5) * 16, (ty + 1) * TILE, (Math.random() - .5) * 80, 40 + Math.random() * 60, 0.3, '#c9b89a', 2, 300);
+    return;
+  }
+  if (t === 'u') { sfx('bonk'); return; }
+  bumps.push({ tx, ty, t: 0 });
+  const top = { x: tx * TILE, y: (ty - 1) * TILE + 8, w: TILE, h: 24 };
+  for (const e of enemies)
+    if (e.active && !e.dead && e.type === 'spiridus' && overlap(e, top)) killEnemy(e, 'flip', tx * TILE + 16);
+  for (const it of items)
+    if (!it.done && it.type === 'coin' && overlap(it, top)) { it.done = true; collectCoin(it.x + 8, it.y + 10); }
+  tiles[ty][tx] = 'u';
+  if (t === 'B') {
+    coins++; sfx('coin');
+    popups.push({ x: tx * TILE + 16, y: ty * TILE, vy: -420, life: 0.55 });
+    floater('+1', tx * TILE + 16, ty * TILE - 34);
+  } else if (t === 'P') {
+    items.push({ type: 'bow', x: tx * TILE + 4, y: ty * TILE + 4, w: 24, h: 24, t: 0, rising: true, targetY: ty * TILE - 26 });
+    sfx('reveal');
+  } else if (t === 'H') {
+    items.push({ type: 'heart', x: tx * TILE + 5, y: ty * TILE + 4, w: 22, h: 22, t: 0, rising: true, targetY: ty * TILE - 24 });
+    sfx('reveal');
+  } else if (t === 'F') {
+    items.push({ type: 'sword_iron', x: tx * TILE + 4, y: ty * TILE + 4, w: 24, h: 24, t: 0, rising: true, targetY: ty * TILE - 26 });
+    sfx('reveal');
+  } else if (t === 'N') {
+    items.push({ type: 'sword_netherite', x: tx * TILE + 4, y: ty * TILE + 4, w: 24, h: 24, t: 0, rising: true, targetY: ty * TILE - 26 });
+    sfx('reveal');
+  }
+}
+
+function updatePlay(dt) {
+  const p = player;
+  playTime += dt;
+  p.prevY = p.y;
+  if (p.inv > 0) p.inv -= dt;
+  if (p.hurtT > 0) p.hurtT -= dt;
+  if (p.land > 0) p.land -= dt;
+  p.fireCd -= dt;
+
+  // --- mers ---
+  const dir = p.hurtT > 0 ? 0 : (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+  if (dir) {
+    const base = p.onGround ? PHYS.accel : PHYS.airAccel;
+    const turning = p.vx !== 0 && Math.sign(p.vx) !== dir;
+    p.vx += dir * (turning && p.onGround ? base + PHYS.friction : base) * dt;
+    if (Math.abs(p.vx) > PHYS.runMax) p.vx = Math.sign(p.vx) * PHYS.runMax;
+    p.face = dir;
+    if (turning && p.onGround && Math.abs(p.vx) > 120 && Math.random() < 0.3) dust(p, 1);
+  } else {
+    const dec = (p.onGround ? PHYS.friction : PHYS.airAccel * 0.35) * dt;
+    p.vx = Math.abs(p.vx) <= dec ? 0 : p.vx - Math.sign(p.vx) * dec;
+  }
+
+  // --- săritură (cu memorie de apăsare și toleranță la margine) ---
+  if (edges.jump) p.buffer = Math.max(PHYS.buffer, 1e-4); else p.buffer -= dt;
+  if (p.onGround) { p.coyote = Math.max(PHYS.coyote, 1e-4); p.glideLeft = Infinity; }
+  else p.coyote -= dt;
+  if (p.buffer > 0 && p.coyote > 0 && p.hurtT <= 0) {
+    p.vy = -PHYS.jump; p.onGround = false; p.coyote = 0; p.buffer = 0; p.jumping = true;
+    sfx('jump'); dust(p, 5);
+  }
+  if (p.jumping && !keys.jump && p.vy < 0) { p.vy *= PHYS.jumpCut; p.jumping = false; }
+  if (p.vy >= 0) p.jumping = false;
+
+  // --- gravitație și planare ---
+  p.vy += PHYS.gravity * dt;
+  p.gliding = false;
+  if (!p.onGround && keys.jump && p.vy > 0 && p.glideLeft > 0 && p.hurtT <= 0) {
+    p.gliding = true;
+    p.glideLeft -= dt;
+    if (p.vy > PHYS.glideFall) p.vy = Math.max(PHYS.glideFall, p.vy - PHYS.gravity * 2.5 * dt);
+    if (Math.random() < 0.2) part(p.x + p.w / 2 - p.face * 18, p.y + 6, -p.face * 60, 20, 0.4, 'rgba(255,255,255,.7)', 2, 0);
+  }
+  if (p.vy > MAXFALL) p.vy = MAXFALL;
+
+  // --- mișcare ---
+  const wasGround = p.onGround, fallV = p.vy;
+  moveX(p, p.vx * dt);
+  const r = moveY(p, p.vy * dt);
+  p.onGround = !!(r && r.floor);
+  if (p.onGround && !wasGround && fallV > 380) { p.land = 0.12; dust(p, 6); }
+  if (r && r.ceil) { hitBlock(r.tx, r.ty); p.jumping = false; }
+  p.anim += Math.abs(p.vx) * dt * 0.055;
+
+  // --- atac (arc sau sabie) ---
+  if (edges.fire) {
+    if (godMode && p.weapon === 'none') p.weapon = persistentGodWeapon();
+    if (p.weapon === 'bow') {
+      if (p.fireCd <= 0) {
+        flames.push({ x: p.face > 0 ? p.x + p.w - 2 : p.x - 16, y: p.y + 4, w: 16, h: 4, vx: p.face * 620 + p.vx * 0.3, life: 0.6, face: p.face, arrow: true });
+        p.fireCd = 0.32; sfx('fire');
+      }
+    } else if (p.weapon === 'iron' || p.weapon === 'netherite') {
+      if (p.fireCd <= 0) {
+        const netherite = p.weapon === 'netherite';
+        const range = netherite ? 34 : 25;
+        const box = { x: p.face > 0 ? p.x + p.w - 2 : p.x - range + 2, y: p.y - 4, w: range, h: p.h + 8 };
+        let hitAny = false;
+        for (const e of enemies) if (e.active && !e.dead && overlap(box, e)) { killEnemy(e, 'flip', p.x + p.w / 2); hitAny = true; }
+        p.fireCd = netherite ? 0.22 : 0.4;
+        p.swingT = 0.16;
+        sfx(hitAny ? 'kill' : 'bonk');
+        const col = netherite ? '#8a5cd6' : '#dfe3e8';
+        for (let i = 0; i < 6; i++)
+          part(p.x + p.w / 2 + p.face * 16, p.y + p.h / 2, p.face * (60 + Math.random() * 100), (Math.random() - .5) * 100, 0.25, col, 2, 0);
+      }
+    } else {
+      for (let i = 0; i < 5; i++)
+        part(p.x + p.w / 2 + p.face * 14, p.y + 8, p.face * (40 + Math.random() * 60), -20 - Math.random() * 40, 0.5, '#b9b0c4', 4, -40);
+      sfx('puff');
+    }
+  }
+  if (p.swingT > 0) p.swingT -= dt;
+
+  // --- țepi și râpe ---
+  const lx = Math.floor(p.x / TILE), rx = Math.floor((p.x + p.w - 0.01) / TILE);
+  const t0 = Math.max(0, Math.floor(p.y / TILE)), t1 = Math.min(H - 1, Math.floor((p.y + p.h - 0.01) / TILE));
+  for (let ty = t0; ty <= t1; ty++) for (let tx = lx; tx <= rx; tx++) {
+    if (tileAt(tx, ty) === '^' && overlap(p, { x: tx * TILE + 4, y: ty * TILE + 18, w: TILE - 8, h: 14 })) {
+      hurt(tx * TILE + 16);
+      if (state === 'play') p.vy = -560;
+    }
+  }
+  if (state !== 'play') return;
+  if (p.y > VH + 40) { fall(); return; }
+
+  // --- obiecte ---
+  for (const it of items) {
+    if (it.done) continue;
+    it.t += dt;
+    if (it.rising) {
+      it.y -= 70 * dt;
+      if (it.y <= it.targetY) { it.y = it.targetY; it.rising = false; }
+      continue;
+    }
+    if (overlap(player, it)) {
+      it.done = true;
+      if (it.type === 'coin') collectCoin(it.x + 8, it.y + 10);
+      else if (it.type === 'heart') {
+        hearts = Math.min(MAXH, hearts + 1); sfx('heart'); floater('+1 inimă', it.x + 11, it.y - 6);
+      } else if (it.type === 'bow' || it.type === 'sword_iron' || it.type === 'sword_netherite') {
+        const rank = { none: 0, bow: 1, iron: 2, netherite: 3 };
+        const got = it.type === 'bow' ? 'bow' : (it.type === 'sword_iron' ? 'iron' : 'netherite');
+        const label = got === 'bow' ? 'Arc' : (got === 'iron' ? 'Sabie de fier' : 'Sabie de netherite');
+        if (rank[got] >= rank[player.weapon]) player.weapon = got;
+        sfx('power');
+        floater(label + '!', it.x + 12, it.y - 6);
+        const col = got === 'bow' ? '#caa46b' : (got === 'iron' ? '#dfe3e8' : '#8a5cd6');
+        for (let i = 0; i < 14; i++) part(it.x + 12, it.y + 12, (Math.random() - .5) * 240, (Math.random() - .5) * 240, 0.5, col, 3, 0);
+        if (!gotWeaponHint) {
+          gotWeaponHint = true;
+          showToast(isTouch ? 'Ai găsit o armă. Apasă ⚔️ ca să ataci.' : 'Ai găsit o armă. Apasă X sau Shift ca să ataci.', 3.4);
+        }
+      }
+    }
+  }
+  items = items.filter(i => !i.done);
+
+  // --- punct de salvare și cuib ---
+  if (checkpoint && !checkpoint.active && overlap(player, { x: checkpoint.cx - 30, y: checkpoint.fy - 100, w: 64, h: 100 })) {
+    checkpoint.active = true;
+    spawn = { x: checkpoint.cx - 11, y: checkpoint.fy - 32 };
+    hearts = MAXH; sfx('checkpoint');
+    showToast('Te-ai odihnit în pat. De aici reapari dacă mori.', 2.8);
+    for (let i = 0; i < 16; i++) part(checkpoint.cx, checkpoint.fy - 40, (Math.random() - .5) * 200, -Math.random() * 200, 0.7, '#ffd9d0', 3, 300);
+  }
+  if (overlap(player, { x: nest.cx - 22, y: 0, w: 44, h: nest.fy })) {
+    state = 'win'; winT = 0; sfx('win');
+    return;
+  }
+
+  // --- inamici ---
+  for (const e of enemies) {
+    if (e.gone) continue;
+    if (!e.active) { if (e.x < cam.x + VW + 80) e.active = true; else continue; }
+    e.t += dt;
+    if (e.dead) {
+      e.deadT += dt;
+      if (e.how === 'stomp') { if (e.deadT > 0.4) e.gone = true; }
+      else { e.vy += PHYS.gravity * dt; e.y += e.vy * dt; e.x += e.vx * dt; if (e.y > VH + 80) e.gone = true; }
+      continue;
+    }
+    if (e.type === 'spiridus') {
+      e.vx = e.dir * 55;
+      e.vy = Math.min(MAXFALL, e.vy + PHYS.gravity * dt);
+      if (moveX(e, e.vx * dt)) e.dir *= -1;
+      const er = moveY(e, e.vy * dt);
+      if (er && er.floor) {
+        // se întoarce la margine în loc să cadă
+        const ax = e.dir > 0 ? e.x + e.w + 1 : e.x - 1;
+        const t = tileAt(Math.floor(ax / TILE), Math.floor((e.y + e.h + 2) / TILE));
+        if (!(SOLID.has(t) || t === '-')) e.dir *= -1;
+      }
+      if (e.y > VH + 60) e.gone = true;
+    } else {
+      e.x += e.dir * 70 * dt;
+      if (Math.abs(e.x - e.baseX) > 80) { e.x = e.baseX + Math.sign(e.x - e.baseX) * 80; e.dir *= -1; }
+      e.y = e.baseY + Math.sin(e.t * 3) * 20;
+    }
+    if (overlap(player, e)) {
+      if (godMode) {
+        // În GOD Mode, orice mob atins este omorât instantaneu.
+        killEnemy(e, 'flip', player.x + player.w / 2);
+        player.glideLeft = Infinity;
+        sfx('kill');
+      } else if (player.vy > 0 && player.prevY + player.h <= e.y + 12) {
+        killEnemy(e, 'stomp', 0);
+        player.vy = keys.jump ? -PHYS.jump * 0.8 : -PHYS.jump * 0.5;
+        player.jumping = keys.jump;
+        player.glideLeft = PHYS.glideTime;
+        sfx('stomp');
+      } else {
+        hurt(e.x + e.w / 2);
+        if (state !== 'play') return;
+      }
+    }
+  }
+
+  // --- flăcări ---
+  for (const f of flames) {
+    f.life -= dt;
+    f.x += f.vx * dt;
+    if (Math.random() < 0.7) part(f.x + f.w / 2, f.y + f.h / 2 + (Math.random() - .5) * 8, -f.face * 40, -30, 0.25, Math.random() < .5 ? '#ff7a2a' : '#ffd35a', 3, -60);
+    const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+    if (f.life <= 0 || isSolid(Math.floor(cx / TILE), Math.floor(cy / TILE))) {
+      f.done = true;
+      for (let i = 0; i < 5; i++) part(cx, cy, (Math.random() - .5) * 120, (Math.random() - .5) * 120, 0.3, '#9a8fa8', 3, -40);
+      continue;
+    }
+    for (const e of enemies) {
+      // Arcul poate omorî orice tip de inamic, nu doar liliecii.
+      if (e.active && !e.dead && !e.gone && overlap(f, e)) {
+        killEnemy(e, 'flip', f.x);
+        f.done = true;
+        break;
+      }
+    }
+  }
+  flames = flames.filter(f => !f.done);
+}
+
+function update(dt) {
+  if (state === 'play') updatePlay(dt);
+  else if (state === 'dead') {
+    deadT += dt;
+    const p = player;
+    if (p.y < VH + 100) { p.vy += PHYS.gravity * dt; p.y += p.vy * dt; }
+    if (deadT > 1.5) { hearts = MAXH; respawn('none'); state = 'play'; }
+  } else if (state === 'win') {
+    winT += dt;
+    if (Math.random() < 0.3) part(nest.cx + (Math.random() - .5) * 80, nest.fy - 20 - Math.random() * 60, 0, -40, 0.8, '#ffe9a8', 3, 0);
+    if (winT > 0.8 && edges.jump) nextLevel();
+  }
+
+  for (const q of particles) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vy += q.grav * dt; }
+  particles = particles.filter(q => q.life > 0);
+  for (const q of popups) { q.life -= dt; q.y += q.vy * dt; q.vy += 1100 * dt; }
+  popups = popups.filter(q => q.life > 0);
+  for (const q of floaters) { q.life -= dt; q.y -= 40 * dt; }
+  floaters = floaters.filter(q => q.life > 0);
+  for (const b of bumps) b.t += dt;
+  bumps = bumps.filter(b => b.t < 0.18);
+  if (toast) { toast.t -= dt; if (toast.t <= 0) toast = null; }
+  if (shakeT > 0) shakeT -= dt;
+
+  const p = player;
+  cam.look += (p.face * 60 - cam.look) * Math.min(1, dt * 2.5);
+  const target = p.x + p.w / 2 - VW / 2 + cam.look;
+  cam.x += (target - cam.x) * Math.min(1, dt * 7);
+  cam.x = clamp(cam.x, 0, W * TILE - VW);
+
+  edges.jump = false; edges.fire = false;
+}
+
+// ============================================================
+//  Desen
+// ============================================================
+function ell(x, y, rx, ry, rot = 0) { ctx.beginPath(); ctx.ellipse(x, y, Math.max(0.1, rx), Math.max(0.1, ry), rot, 0, Math.PI * 2); ctx.fill(); }
+function diamond(x, y, r) { ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill(); }
+function txt(s, x, y, size, color, align = 'left', outline = 'rgba(18,10,28,.9)', lw = 4) {
+  ctx.font = `bold ${size}px "Trebuchet MS","Segoe UI",sans-serif`;
+  ctx.textAlign = align; ctx.textBaseline = 'alphabetic'; ctx.lineJoin = 'round';
+  if (lw > 0) { ctx.strokeStyle = outline; ctx.lineWidth = lw; ctx.strokeText(s, x, y); }
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
+}
+
+function ridge(off, color, base, amp, seed) {
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.moveTo(0, VH);
+  for (let sx = 0; sx <= VW; sx += 10) {
+    const wx = sx + off;
+    const y = base - amp - (Math.sin(wx * 0.006 + seed) * amp + Math.sin(wx * 0.017 + seed * 1.7) * amp * 0.45 + Math.sin(wx * 0.041 + seed * 3.1) * amp * 0.15);
+    ctx.lineTo(sx, y);
+  }
+  ctx.lineTo(VW, VH); ctx.closePath(); ctx.fill();
+}
+function pines(off, color, base) {
+  ctx.fillStyle = color;
+  const spacing = 46, start = Math.floor(off / spacing) - 1;
+  for (let i = start; i < start + VW / spacing + 3; i++) {
+    const r = hash(i * 3.7 + 1), sx = i * spacing - off + r * 20, h = 40 + r * 50, by = base + hash(i * 1.3) * 14;
+    ctx.beginPath(); ctx.moveTo(sx, by - h); ctx.lineTo(sx + h * 0.32, by); ctx.lineTo(sx - h * 0.32, by); ctx.closePath(); ctx.fill();
+  }
+  ctx.fillRect(0, base + 8, VW, VH);
+}
+
+function cloud(x, y, s) {
+  ctx.fillStyle = '#f4f8ff';
+  ctx.fillRect(x, y, s * 2.4, s * 0.8);
+  ctx.fillRect(x + s * 0.4, y - s * 0.5, s * 1.6, s * 0.6);
+  ctx.fillRect(x + s * 1.2, y - s * 0.3, s * 1.1, s * 0.5);
+}
+
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, VH);
+  const T = TH();
+  g.addColorStop(0, T.sky[0]); g.addColorStop(0.6, T.sky[1]); g.addColorStop(1, T.sky[2]);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  if (T.stars) { ctx.fillStyle = '#fff'; for (let i = 0; i < 70; i++) { const sx = ((hash(i * 2) * 1200 - CX * 0.02) % VW + VW) % VW; ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(anim * 1.5 + i)); ctx.fillRect(sx, hash(i * 5) * 300, 2, 2); } ctx.globalAlpha = 1; }
+  else for (let i = 0; i < 7; i++) {
+    const sx = ((hash(i) * 1400 - CX * 0.04) % (VW + 200) + (VW + 200)) % (VW + 200) - 100;
+    const sy = 40 + hash(i + 99) * 120;
+    cloud(sx, sy, 18 + hash(i * 3) * 10);
+  }
+  const sunX = 620 - CX * 0.03, sunY = 90;
+  ctx.fillStyle = T.sun; ctx.beginPath(); ctx.arc(sunX, sunY, 34, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(255,250,200,.35)'; ctx.beginPath(); ctx.arc(sunX, sunY, 52, 0, Math.PI * 2); ctx.fill();
+  ridge(CX * 0.12, T.r1, 260, 55, 1.3 + level);
+  ridge(CX * 0.25, T.r2, 315, 42, 4.1 + level);
+  pines(CX * 0.45, T.pn, 365);
+}
+
+function bumpOffset(tx, ty) {
+  for (const b of bumps) if (b.tx === tx && b.ty === ty) return Math.sin(b.t / 0.18 * Math.PI) * 7;
+  return 0;
+}
+
+function drawTiles() {
+  const T = TH();
+  const x0 = Math.max(0, Math.floor(CX / TILE)), x1 = Math.min(W - 1, Math.floor((CX + VW) / TILE));
+  for (let ty = 0; ty < H; ty++) for (let tx = x0; tx <= x1; tx++) {
+    const t = tiles[ty][tx];
+    if (t === '.') continue;
+    const px = tx * TILE - CX, py = ty * TILE - bumpOffset(tx, ty);
+    switch (t) {
+      case '#': {
+        // pământ (dirt)
+        ctx.fillStyle = T.d[0]; ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = T.d[1];
+        ctx.fillRect(px + (hash(tx * 13 + ty * 7) * 22 | 0), py + 10 + (hash(tx + ty * 31) * 16 | 0), 5, 4);
+        ctx.fillRect(px + (hash(tx * 3 + ty) * 26 | 0), py + 4 + (hash(tx * 5 + ty * 2) * 24 | 0), 4, 4);
+        ctx.fillStyle = T.d[2];
+        ctx.fillRect(px + (hash(tx * 9 + ty * 4) * 26 | 0), py + 4 + (hash(tx * 2 + ty * 9) * 24 | 0), 3, 3);
+        if (tileAt(tx, ty - 1) !== '#') {
+          // iarbă (grass top)
+          ctx.fillStyle = T.g[0]; ctx.fillRect(px, py, TILE, 10);
+          ctx.fillStyle = T.g[1]; ctx.fillRect(px, py, TILE, 4);
+          ctx.fillStyle = T.g[2];
+          for (let i = 0; i < 4; i++) ctx.fillRect(px + 2 + i * 8 + (hash(tx * 17 + i) * 4 | 0), py + 5, 3, 3 + (hash(tx + i * 5) * 3 | 0));
+        }
+        ctx.fillStyle = 'rgba(0,0,0,.15)';
+        if (tileAt(tx - 1, ty) !== '#') ctx.fillRect(px, py, 2, TILE);
+        if (tileAt(tx + 1, ty) !== '#') ctx.fillRect(px + TILE - 2, py, 2, TILE);
+        break;
+      }
+      case '=': {
+        // piatră (stone)
+        ctx.fillStyle = '#8a8a8f'; ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = '#a3a3aa';
+        ctx.fillRect(px + (hash(tx * 5 + ty * 2) * 22 | 0), py + (hash(tx * 11 + ty) * 22 | 0), 5, 4);
+        ctx.fillRect(px + (hash(tx * 2 + ty * 8) * 24 | 0), py + (hash(tx * 6 + ty * 3) * 24 | 0), 4, 3);
+        ctx.fillStyle = '#6b6b72';
+        ctx.fillRect(px + (hash(tx * 9 + ty * 5) * 24 | 0), py + (hash(tx * 4 + ty * 7) * 24 | 0), 5, 4);
+        ctx.fillRect(px + (hash(tx * 7 + ty * 3) * 22 | 0), py + (hash(tx * 13 + ty * 2) * 22 | 0), 3, 3);
+        ctx.strokeStyle = 'rgba(0,0,0,.15)'; ctx.lineWidth = 1;
+        ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+        break;
+      }
+      case 'B': case 'P': case 'H': case 'N': case 'F': {
+        // Lucky Block: cub galben cu semn de întrebare
+        const glow = 0.6 + 0.4 * Math.sin(anim * 3 + tx * 0.5);
+        ctx.fillStyle = '#caa227'; ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = '#f2e14c'; ctx.fillRect(px + 3, py + 3, TILE - 6, TILE - 6);
+        ctx.fillStyle = '#e8c93a'; ctx.fillRect(px + 3, py + 3, TILE - 6, 5);
+        ctx.fillStyle = '#a8801c'; ctx.fillRect(px + 3, py + TILE - 8, TILE - 6, 5);
+        ctx.save();
+        ctx.globalAlpha = glow;
+        ctx.fillStyle = '#3a2a08';
+        ctx.font = 'bold 22px "Trebuchet MS",sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('?', px + 16, py + 17);
+        ctx.restore();
+        break;
+      }
+      case 'u': {
+        // bloc de piatră spart (folosit)
+        ctx.fillStyle = '#5c5c62'; ctx.fillRect(px, py, TILE, TILE);
+        ctx.fillStyle = '#484850'; ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+        ctx.fillStyle = '#6a6a72';
+        ctx.fillRect(px + 5, py + 5, 3, 3); ctx.fillRect(px + 24, py + 5, 3, 3);
+        ctx.fillRect(px + 5, py + 24, 3, 3); ctx.fillRect(px + 24, py + 24, 3, 3);
+        break;
+      }
+      case '-': {
+        // scândură de stejar
+        ctx.fillStyle = '#a1743f'; ctx.fillRect(px, py, TILE, 10);
+        ctx.fillStyle = '#b98a4f'; ctx.fillRect(px, py, TILE, 3);
+        ctx.fillStyle = '#7a5228'; ctx.fillRect(px + TILE - 2, py, 2, 10); ctx.fillRect(px + 8, py + 5, 3, 2);
+        break;
+      }
+      case '^': {
+        // cactus
+        ctx.fillStyle = '#3d7a2e'; ctx.fillRect(px + 6, py, TILE - 12, TILE);
+        ctx.fillStyle = '#4f9a3c'; ctx.fillRect(px + 7, py, 4, TILE);
+        ctx.fillStyle = '#2c5c20'; ctx.fillRect(px + TILE - 11, py, 4, TILE);
+        for (let i = 0; i < 3; i++) {
+          const sy = py + 6 + i * 10;
+          ctx.fillStyle = '#e9e9c8'; ctx.fillRect(px + 3, sy, 3, 2); ctx.fillRect(px + TILE - 6, sy + 4, 3, 2);
+        }
+        break;
+      }
+    }
+  }
+}
+
+function drawSigns() {
+  if (level !== 0) return;
+  for (const s of SIGNS) {
+    const x = s.tx * TILE - CX;
+    if (x > VW || x < -520) continue;
+    txt(isTouch ? s.m : s.d, x, s.ty * TILE + 20, 15, 'rgba(255,244,220,.95)', 'left', 'rgba(20,12,30,.75)', 4);
+  }
+}
+
+function drawCoin(cx, cy, seed) {
+  const s = Math.abs(Math.cos(anim * 3.2 + seed * 0.05));
+  ctx.fillStyle = '#a8700f'; ell(cx, cy, 7.5 * s + 1.2, 9.5);
+  ctx.fillStyle = '#f5c542'; ell(cx, cy, 5.8 * s + 0.6, 7.8);
+  if (s > 0.35) { ctx.fillStyle = '#fff1a8'; ctx.fillRect(cx - 1.2 * s - 0.5, cy - 4.5, 2.4 * s, 9); }
+}
+function drawBowIcon(cx, cy, s) {
+  ctx.strokeStyle = '#8a5a32'; ctx.lineWidth = s * 0.22; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(cx, cy, s * 0.9, -Math.PI * 0.38, Math.PI * 0.38); ctx.stroke();
+  ctx.strokeStyle = '#e9e2c9'; ctx.lineWidth = s * 0.1;
+  ctx.beginPath(); ctx.moveTo(cx + Math.cos(-Math.PI * 0.38) * s * 0.9, cy + Math.sin(-Math.PI * 0.38) * s * 0.9);
+  ctx.lineTo(cx + Math.cos(Math.PI * 0.38) * s * 0.9, cy + Math.sin(Math.PI * 0.38) * s * 0.9); ctx.stroke();
+}
+function drawSwordIcon(cx, cy, s, blade, guard) {
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(-Math.PI / 4);
+  ctx.fillStyle = blade; ctx.fillRect(-s * 0.14, -s * 1.1, s * 0.28, s * 1.5);
+  ctx.fillStyle = guard; ctx.fillRect(-s * 0.36, s * 0.36, s * 0.72, s * 0.18);
+  ctx.fillStyle = '#6b4a28'; ctx.fillRect(-s * 0.1, s * 0.5, s * 0.2, s * 0.5);
+  ctx.restore();
+}
+function drawItemIcon(type, cx, cy) {
+  const pulse = 0.5 + 0.5 * Math.sin(anim * 8);
+  const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, 22);
+  const glow = type === 'bow' ? 'rgba(220,190,120,.5)' : (type === 'sword_iron' ? 'rgba(220,225,235,.5)' : 'rgba(150,90,220,.55)');
+  g.addColorStop(0, glow); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, 20 + pulse * 3, 0, Math.PI * 2); ctx.fill();
+  if (type === 'bow') drawBowIcon(cx, cy, 13);
+  else if (type === 'sword_iron') drawSwordIcon(cx, cy, 13, '#dfe3e8', '#6b6f7a');
+  else drawSwordIcon(cx, cy, 13, '#8a5cd6', '#2c1f42');
+}
+function drawHeart(x, y, s, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y + s * 0.3);
+  ctx.bezierCurveTo(x, y, x - s * 0.5, y, x - s * 0.5, y + s * 0.3);
+  ctx.bezierCurveTo(x - s * 0.5, y + s * 0.6, x, y + s * 0.8, x, y + s);
+  ctx.bezierCurveTo(x, y + s * 0.8, x + s * 0.5, y + s * 0.6, x + s * 0.5, y + s * 0.3);
+  ctx.bezierCurveTo(x + s * 0.5, y, x, y, x, y + s * 0.3);
+  ctx.fill();
+}
+function drawItem(it) {
+  const x = it.x - CX, y = it.y + (it.rising ? 0 : Math.sin(anim * 3 + it.x * 0.01) * 2.5);
+  if (x < -40 || x > VW + 40) return;
+  if (it.type === 'coin') drawCoin(x + 8, y + 10, it.x);
+  else if (it.type === 'heart') drawHeart(x + 11, y + 1, 20, '#e8413a');
+  else drawItemIcon(it.type, x + 12, y + 12);
+}
+
+function drawCheckpoint() {
+  const c = checkpoint, x = c.cx - CX, fy = c.fy;
+  if (x < -120 || x > VW + 120) return;
+  ctx.save(); ctx.translate(x, fy);
+  // patul (punct de respawn în stil Minecraft)
+  const glow = c.active ? 0.35 + 0.25 * Math.sin(anim * 2) : 0;
+  if (glow > 0) {
+    const g = ctx.createRadialGradient(0, -14, 4, 0, -14, 44);
+    g.addColorStop(0, `rgba(255,120,110,${glow})`); g.addColorStop(1, 'rgba(255,120,110,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, -14, 44, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = '#7a5230'; ctx.fillRect(-4, -6, 56, 6);
+  ctx.fillStyle = '#5c3d22'; ctx.fillRect(-4, -6, 4, 10); ctx.fillRect(48, -6, 4, 10);
+  ctx.fillStyle = '#c33'; ctx.fillRect(-2, -20, 52, 14);
+  ctx.fillStyle = '#a92828'; ctx.fillRect(-2, -9, 52, 3);
+  ctx.fillStyle = '#e8e8e0'; ctx.fillRect(0, -20, 14, 14);
+  ctx.fillStyle = '#c9c9c0'; ctx.fillRect(0, -9, 14, 3);
+  txt('Pat', 24, -34, 13, '#ffe9a8', 'center');
+  ctx.restore();
+}
+
+function drawNest() {
+  const x = nest.cx - CX, fy = nest.fy;
+  if (x < -120 || x > VW + 120) return;
+  const pulse = 0.5 + 0.5 * Math.sin(anim * 3);
+  const pw = 44, ph = 76;
+  const g = ctx.createRadialGradient(x, fy - ph / 2, 4, x, fy - ph / 2, 70 + pulse * 12);
+  g.addColorStop(0, 'rgba(150,80,230,.5)'); g.addColorStop(1, 'rgba(150,80,230,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, fy - ph / 2, 70 + pulse * 12, 0, Math.PI * 2); ctx.fill();
+  // rama de obsidian
+  ctx.fillStyle = '#160a1e';
+  ctx.fillRect(x - pw / 2 - 8, fy - ph - 8, pw + 16, ph + 8);
+  // interiorul portalului, animat
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x - pw / 2, fy - ph, pw, ph); ctx.clip();
+  for (let i = 0; i < 10; i++) {
+    const yy = ((anim * 40 + i * 15) % (ph + 20)) - 10;
+    const hueShift = hash(i * 3.3) * 40;
+    ctx.fillStyle = `hsl(${270 + hueShift}, 80%, ${55 + hash(i) * 20}%)`;
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(x - pw / 2, fy - ph + yy, pw, 6);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  ctx.strokeStyle = '#2a1638'; ctx.lineWidth = 4;
+  ctx.strokeRect(x - pw / 2 - 8, fy - ph - 8, pw + 16, ph + 8);
+  for (let i = 0; i < 6; i++) {
+    if (Math.random() < 0.5) part(x - pw / 2 + Math.random() * pw, fy - Math.random() * ph, (Math.random() - .5) * 20, -20 - Math.random() * 30, 0.6, '#b98cf0', 2, -10);
+  }
+  txt('Portalul', x, fy - ph - 20, 14, '#ffe9a8', 'center');
+}
+
+function drawEnemy(e) {
+  const cx = e.x + e.w / 2 - CX;
+  if (cx < -60 || cx > VW + 60) return;
+  ctx.save();
+  if (e.type === 'spiridus') {
+    // zombi Minecraft: cap verde, cămașă albastră ruptă, brațe întinse înainte
+    const fy = e.y + e.h;
+    ctx.translate(cx, fy);
+    if (e.dead && e.how === 'flip') { ctx.translate(0, -12); ctx.scale(1, -1); ctx.translate(0, 12); }
+    if (e.dead && e.how === 'stomp') {
+      const k = Math.min(1, e.deadT / 0.08);
+      ctx.scale(1 + 0.3 * k, 1 - 0.65 * k);
+      ctx.globalAlpha = 1 - clamp((e.deadT - 0.2) / 0.2, 0, 1);
+    }
+    ctx.scale(e.dir, 1);
+    const step = e.dead ? 0 : Math.sin(e.t * 10);
+    const SKIN = '#5a8f4a', SHIRT = '#3a5a9a', SHIRT_D = '#2a4272', PANTS = '#3a3a44';
+    // picioare
+    ctx.fillStyle = PANTS;
+    ctx.fillRect(-6, -12 - Math.max(0, step) * 2, 5, 12); ctx.fillRect(1, -12 - Math.max(0, -step) * 2, 5, 12);
+    // brațe întinse (semnătura zombie)
+    ctx.fillStyle = SKIN;
+    ctx.fillRect(-15, -25, 12, 4.5); ctx.fillRect(3, -25, 12, 4.5);
+    // corp
+    ctx.fillStyle = SHIRT; ctx.fillRect(-7, -24, 14, 12);
+    ctx.fillStyle = SHIRT_D; ctx.fillRect(-7, -16, 14, 3);
+    // cap
+    ctx.fillStyle = SKIN; ctx.fillRect(-6, -34, 12, 10.5);
+    ctx.fillStyle = '#1e2416'; ctx.fillRect(-3.5, -29, 2.6, 2.6); ctx.fillRect(1.5, -29, 2.6, 2.6);
+    ctx.fillStyle = '#2c1b12'; ctx.fillRect(-4, -25, 8, 1.4);
+  } else {
+    const cy = e.y + e.h / 2;
+    ctx.translate(cx, cy);
+    if (e.dead && e.how === 'flip') ctx.scale(1, -1);
+    if (e.dead && e.how === 'stomp') { ctx.scale(1.2, 0.4); ctx.globalAlpha = 1 - clamp(e.deadT / 0.4, 0, 1); }
+    ctx.scale(e.dir, 1);
+    const f = e.dead ? 0 : Math.sin(e.t * 16);
+    ctx.fillStyle = '#4a4550'; ctx.strokeStyle = '#141018'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(-4, 0); ctx.lineTo(-16, -8 + f * 8); ctx.lineTo(-21, 2 + f * 3); ctx.lineTo(-13, 1); ctx.lineTo(-10, 6); ctx.closePath(); ctx.stroke(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(4, 0); ctx.lineTo(16, -8 + f * 8); ctx.lineTo(21, 2 + f * 3); ctx.lineTo(13, 1); ctx.lineTo(10, 6); ctx.closePath(); ctx.stroke(); ctx.fill();
+    ctx.fillStyle = '#141018';
+    ell(0, 1, 7.5, 8);
+    ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(-4, -11); ctx.lineTo(-1, -5); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(5, -4); ctx.lineTo(4, -11); ctx.lineTo(1, -5); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#e04a3a'; ell(1.5, -1, 2, 2); ell(5, -1, 1.7, 1.7);
+  }
+  ctx.restore();
+}
+
+function drawFlames() {
+  for (const f of flames) {
+    const x = f.x + f.w / 2 - CX, y = f.y + f.h / 2;
+    ctx.save();
+    ctx.translate(x, y); ctx.scale(f.face, 1);
+    ctx.strokeStyle = '#8a5a32'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(9, 0); ctx.stroke();
+    ctx.fillStyle = '#c9c9c9';
+    ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(4, -2.5); ctx.lineTo(4, 2.5); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#e9e2c9'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-9, -3); ctx.lineTo(-5, 0); ctx.lineTo(-9, 3); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawHeldSword(blade, guard) {
+  ctx.save(); ctx.rotate(-0.55);
+  ctx.fillStyle = '#6b4a28'; ctx.fillRect(-4.5, -1.3, 4.5, 2.6);
+  ctx.fillStyle = guard; ctx.fillRect(0, -2, 4, 4);
+  ctx.fillStyle = blade; ctx.fillRect(4, -1.4, 13, 2.8);
+  ctx.restore();
+}
+
+function drawPlayer() {
+  const p = player;
+  if (state === 'play' && p.inv > 0 && Math.floor(p.inv * 16) % 2 === 0) return;
+  const cx = Math.round(p.x + p.w / 2 - CX), fy = Math.round(p.y + p.h);
+  ctx.save();
+  ctx.translate(cx, fy);
+  let sx = 1, sy = 1;
+  if (!p.onGround) { const s = Math.min(0.1, Math.abs(p.vy) / 6000); sy = 1 + s; sx = 1 - s; }
+  if (p.land > 0) { const k = p.land / 0.12; sy = 1 - 0.18 * k; sx = 1 + 0.18 * k; }
+  ctx.scale(p.face * sx, sy);
+
+  const run = p.onGround && Math.abs(p.vx) > 20;
+  const bob = run ? Math.abs(Math.sin(p.anim)) * 1.5 : 0;
+  const ph = run ? Math.sin(p.anim) : 0;
+  const swing = p.swingT > 0 ? 1 - p.swingT / 0.16 : 0;
+  const SKIN = '#e8b088', HAIR = '#4a2f1c', SHIRT = '#4a90a4', SHIRT_D = '#2f6a7a',
+        PANTS = '#3a4a8c', SHOE = '#2a2118';
+
+  ctx.translate(0, -bob);
+
+  // aripa elytra (în spate, se desenează prima ca să iasă de sub corp)
+  if (p.gliding) {
+    const flap = Math.sin(anim * 20) * 4;
+    ctx.fillStyle = '#3a3a44'; ctx.strokeStyle = '#1a1a20'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-6, -19); ctx.lineTo(-23, -13 - flap); ctx.lineTo(-20, -1 - flap * 0.4); ctx.lineTo(-7, -7); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#54545f';
+    ctx.beginPath(); ctx.moveTo(-6, -19); ctx.lineTo(-16, -15 - flap * 0.6); ctx.lineTo(-14, -5 - flap * 0.3); ctx.lineTo(-8, -8); ctx.closePath(); ctx.fill();
+  }
+
+  // picioare
+  const legSwing = p.onGround ? ph * 4.5 : (p.vy < 0 ? -3 : 3);
+  ctx.fillStyle = PANTS;
+  ctx.fillRect(-5.5, -12 + Math.max(0, legSwing * 0.3), 5, 12 - Math.max(0, legSwing * 0.3));
+  ctx.fillRect(0.5, -12 + Math.max(0, -legSwing * 0.3), 5, 12 - Math.max(0, -legSwing * 0.3));
+  ctx.fillStyle = SHOE; ctx.fillRect(-5.5, -2.2, 5, 2.2); ctx.fillRect(0.5, -2.2, 5, 2.2);
+
+  // brațul din spate
+  ctx.save(); ctx.translate(-6.5, -21); ctx.rotate(-legSwing * 0.03);
+  ctx.fillStyle = SKIN; ctx.fillRect(-2, 0, 4, 11); ctx.restore();
+
+  // corp
+  ctx.fillStyle = SHIRT; ctx.fillRect(-7, -22, 14, 11);
+  ctx.fillStyle = SHIRT_D; ctx.fillRect(-7, -14, 14, 3);
+
+  // brațul din față + arma din mână
+  ctx.save();
+  const frontArmAngle = swing > 0 ? -1.5 + swing * 1.9 : legSwing * 0.03;
+  ctx.translate(6.5, -21); ctx.rotate(frontArmAngle);
+  ctx.fillStyle = SKIN; ctx.fillRect(-2, 0, 4, 11);
+  ctx.translate(0, 10);
+  if (p.weapon === 'bow') drawBowIcon(2, 0, 10);
+  else if (p.weapon === 'iron') drawHeldSword('#dfe3e8', '#6b6f7a');
+  else if (p.weapon === 'netherite') drawHeldSword('#8a5cd6', '#2c1f42');
+  ctx.restore();
+
+  // cap
+  ctx.fillStyle = SKIN; ctx.fillRect(-5.5, -32, 11, 10);
+  ctx.fillStyle = HAIR; ctx.fillRect(-5.5, -32, 11, 3.5); ctx.fillRect(-5.5, -32, 3, 7);
+  ctx.fillStyle = '#3a2a20'; ctx.fillRect(1.3, -27, 2.2, 2.2);
+  ctx.fillStyle = '#c07a58'; ctx.fillRect(0.5, -24, 3, 1.2);
+  ctx.restore();
+
+  // indicatorul de planare
+  if (state === 'play' && !p.onGround && Number.isFinite(PHYS.glideTime) && p.glideLeft < PHYS.glideTime && PHYS.glideTime > 0) {
+    const frac = clamp(p.glideLeft / PHYS.glideTime, 0, 1);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,.25)';
+    ctx.beginPath(); ctx.arc(cx, p.y - 22, 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = frac > 0.3 ? '#8fe3ff' : '#ff8a5a';
+    ctx.beginPath(); ctx.arc(cx, p.y - 22, 7, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke();
+  }
+}
+
+function drawParticles() {
+  for (const q of particles) {
+    ctx.globalAlpha = clamp(q.life / q.max, 0, 1);
+    ctx.fillStyle = q.color;
+    ctx.fillRect(q.x - CX - q.size / 2, q.y - q.size / 2, q.size, q.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  if (godMode) {
+    ctx.fillStyle = 'rgba(255,210,80,.92)';
+    rrect(VW - 145, 10, 135, 40, 10); ctx.fill();
+    txt('GOD MODE', VW - 77, 37, 17, '#24180a', 'center', 'rgba(255,255,255,0)', 0);
+  }
+  ctx.fillStyle = 'rgba(20,12,30,.55)'; rrect(10, 10, player.weapon !== 'none' ? 232 : 206, 40, 10); ctx.fill();
+  for (let i = 0; i < MAXH; i++) drawHeart(30 + i * 26, 19, 20, i < hearts ? '#e8413a' : 'rgba(255,255,255,.18)');
+  drawCoin(122, 30, 0);
+  txt(`${coins}`, 136, 37, 20, '#ffe9a8', 'left', 'rgba(0,0,0,0)', 0);
+  if (player.weapon === 'bow') drawBowIcon(220, 30, 12);
+  else if (player.weapon === 'iron') drawSwordIcon(220, 30, 12, '#dfe3e8', '#6b6f7a');
+  else if (player.weapon === 'netherite') drawSwordIcon(220, 30, 12, '#8a5cd6', '#2c1f42');
+  const m = Math.floor(playTime / 60), s = Math.floor(playTime % 60);
+  txt(`${m}:${String(s).padStart(2, '0')}`, VW - 18, 38, 20, '#f4ecdc', 'right');
+}
+
+function drawOverlay() {
+  if (state === 'title') {
+    ctx.fillStyle = 'rgba(15,10,28,.62)'; ctx.fillRect(0, 0, VW, VH);
+    txt('Steve', VW / 2, 150, 88, '#f2b632', 'center', '#5a1a14', 10);
+    txt(`Nivelul ${level + 1} din ${NLEV}: ${TH().n}`, VW / 2, 192, 20, '#f4ecdc', 'center');
+    const lines = isTouch
+      ? ['◀ ▶  mergi', '▲  sari; ține apăsat în aer ca să planezi cu Elytra', '⚔️  atacă, după ce găsești o armă dintr-un Lucky Block']
+      : ['← → sau A D  mergi', 'Spațiu, Z sau W  sari; ține apăsat în aer ca să planezi cu Elytra', 'X sau Shift  atacă, după ce găsești o armă dintr-un Lucky Block'];
+    lines.forEach((l, i) => txt(l, VW / 2, 262 + i * 32, 18, '#e6dcf5', 'center'));
+    if (anim % 1.2 < 0.85) txt(isTouch ? 'Atinge ecranul ca să începi' : 'Apasă orice tastă ca să începi', VW / 2, 410, 22, '#ffe9a8', 'center');
+  } else if (state === 'win') {
+    ctx.fillStyle = `rgba(15,10,28,${Math.min(0.65, winT)})`; ctx.fillRect(0, 0, VW, VH);
+    txt(level === NLEV - 1 ? 'Ai terminat jocul! 🎉' : `Nivelul ${level + 1} terminat!`, VW / 2, 170, 44, '#f2b632', 'center', '#5a1a14', 8);
+    const m = Math.floor(playTime / 60), s = Math.floor(playTime % 60);
+    txt(`Bănuți: ${coins} din ${totalCoins}`, VW / 2, 240, 22, '#f4ecdc', 'center');
+    txt(`Timp: ${m}:${String(s).padStart(2, '0')}`, VW / 2, 274, 22, '#f4ecdc', 'center');
+    txt(`Căderi: ${deaths}`, VW / 2, 308, 22, '#f4ecdc', 'center');
+    if (winT > 0.8 && anim % 1.2 < 0.85) txt(isTouch ? (level === NLEV - 1 ? 'Apasă ▲ ca să joci din nou' : 'Apasă ▲ pentru nivelul următor') : (level === NLEV - 1 ? 'Apasă Spațiu ca să joci din nou' : 'Apasă Spațiu pentru nivelul următor'), VW / 2, 390, 20, '#ffe9a8', 'center');
+  } else if (state === 'dead') {
+    ctx.fillStyle = `rgba(15,8,25,${Math.min(0.6, deadT)})`; ctx.fillRect(0, 0, VW, VH);
+    txt('Steve a picat', VW / 2, VH / 2 - 6, 36, '#f4ecdc', 'center');
+    txt('Revii la ultimul pat', VW / 2, VH / 2 + 30, 18, '#c9bde0', 'center');
+  }
+  if (paused && state === 'play') {
+    ctx.fillStyle = 'rgba(15,10,28,.55)'; ctx.fillRect(0, 0, VW, VH);
+    txt('Pauză', VW / 2, VH / 2, 44, '#f4ecdc', 'center');
+    txt('Apasă P ca să continui', VW / 2, VH / 2 + 36, 18, '#c9bde0', 'center');
+  }
+  if (toast) {
+    const a = clamp(Math.min(toast.t * 3, (toast.max - toast.t) * 6), 0, 1);
+    ctx.globalAlpha = a;
+    ctx.font = 'bold 17px "Trebuchet MS","Segoe UI",sans-serif';
+    const w = ctx.measureText(toast.msg).width + 36;
+    ctx.fillStyle = 'rgba(20,12,30,.8)'; rrect(VW / 2 - w / 2, 62, w, 38, 10); ctx.fill();
+    txt(toast.msg, VW / 2, 87, 17, '#ffe9a8', 'center', 'rgba(0,0,0,0)', 0);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function render() {
+  if (!tiles) return;
+  CX = Math.round(cam.x);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VW, VH);
+  ctx.save();
+  if (shakeT > 0) { const k = shakeT / 0.25; ctx.translate(Math.round((Math.random() - .5) * 8 * k), Math.round((Math.random() - .5) * 8 * k)); }
+  drawBackground();
+  if (state !== 'title') drawSigns();
+  for (const it of items) if (it.rising && !it.done) drawItem(it);
+  drawTiles();
+  drawCheckpoint();
+  drawNest();
+  for (const it of items) if (!it.rising && !it.done) drawItem(it);
+  for (const e of enemies) if (!e.gone) drawEnemy(e);
+  drawFlames();
+  drawPlayer();
+  for (const q of popups) drawCoin(q.x - CX, q.y, q.x);
+  drawParticles();
+  for (const f of floaters) { ctx.globalAlpha = clamp(f.life * 2, 0, 1); txt(f.text, f.x - CX, f.y, 16, '#fff2b0', 'center'); }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  if (state !== 'title') drawHUD();
+  drawOverlay();
+}
+
+// ============================================================
+//  Control: tastatură și atingere
+// ============================================================
+const keys = { left: false, right: false, jump: false, fire: false };
+const edges = { jump: false, fire: false };
+const KEYMAP = {
+  ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
+  Space: 'jump', KeyZ: 'jump', KeyW: 'jump', ArrowUp: 'jump', KeyK: 'jump',
+  KeyX: 'fire', KeyJ: 'fire', ShiftLeft: 'fire', ShiftRight: 'fire'
+};
+function press(a) { if (!keys[a]) { keys[a] = true; if (a in edges) edges[a] = true; } }
+function release(a) { keys[a] = false; }
+function releaseAll() { for (const k in keys) keys[k] = false; }
+function startGame() {
+  initAudio();
+  if (state === 'title') { state = 'play'; edges.jump = edges.fire = false; }
+}
+
+window.addEventListener('keydown', e => {
+  if (e.target && e.target.tagName === 'INPUT') return;
+  const a = KEYMAP[e.code];
+  if (a) e.preventDefault();
+  initAudio();
+  if (state === 'title') { if (!e.repeat) startGame(); return; }
+  if (e.repeat) return;
+  if (e.code === 'KeyP' || e.code === 'Escape') { paused = !paused; releaseAll(); return; }
+  if (e.code === 'KeyM') { muted = !muted; showToast(muted ? 'Sunet oprit' : 'Sunet pornit', 1.2); return; }
+  if (e.code === 'KeyN' || e.code === 'KeyB') { level = (level + (e.code === 'KeyN' ? 1 : NLEV - 1)) % NLEV; resetLevel(); state = 'play'; paused = false; releaseAll(); showToast(`Nivelul ${level + 1}: ${TH().n}`, 1.6); return; }
+  if (e.code === 'KeyR') { resetLevel(); state = 'play'; paused = false; releaseAll(); return; }
+  if (a && !paused) press(a);
+});
+window.addEventListener('keyup', e => { const a = KEYMAP[e.code]; if (a) release(a); });
+window.addEventListener('blur', releaseAll);
+
+let isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+const touchEl = document.getElementById('touch');
+function enableTouch() { isTouch = true; touchEl.classList.add('on'); }
+if (isTouch) enableTouch();
+window.addEventListener('touchstart', () => { if (!isTouch) enableTouch(); }, { passive: true });
+
+touchEl.querySelectorAll('.tbtn').forEach(b => {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation(); initAudio();
+    if (state === 'title') { startGame(); return; }
+    try { b.setPointerCapture(e.pointerId); } catch (_) {}
+    b.classList.add('down'); press(k);
+  });
+  const up = () => { b.classList.remove('down'); release(k); };
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointercancel', up);
+  b.addEventListener('lostpointercapture', up);
+});
+document.getElementById('stage').addEventListener('pointerdown', () => {
+  window.focus(); initAudio();
+  if (state === 'title') startGame();
+  else if (state === 'win' && winT > 0.8) nextLevel();
+});
+
+// ============================================================
+//  Panoul de reglaje
+// ============================================================
+const SLIDERS = [
+  ['gravity', 'Gravitație', 1200, 3600, 50],
+  ['jump', 'Forța săriturii', 500, 1200, 10],
+  ['jumpCut', 'Cât taie săritura când dai drumul', 0.2, 1, 0.05],
+  ['runMax', 'Viteză maximă', 140, 420, 10],
+  ['accel', 'Accelerație pe sol', 600, 4000, 50],
+  ['friction', 'Frânare pe sol', 600, 4000, 50],
+  ['airAccel', 'Control în aer', 400, 3000, 50],
+  ['glideFall', 'Viteza de cădere la planare', 40, 300, 5],
+  ['glideTime', 'Durata planării (secunde; ∞ = infinită)', 0.2, 3, 0.1],
+  ['coyote', 'Toleranță la marginea platformei (s)', 0, 0.25, 0.01],
+  ['buffer', 'Memorie pentru apăsarea săriturii (s)', 0, 0.25, 0.01],
+];
+const grid = document.getElementById('grid');
+const physOut = document.getElementById('physOut');
+const physInfo = document.getElementById('physInfo');
+const fmt = v => (v === Infinity ? '∞' : (Number.isInteger(v) ? String(v) : v.toFixed(2)));
+function refreshPhys() {
+  const jh = PHYS.jump * PHYS.jump / (2 * PHYS.gravity) / TILE;
+  const jd = 2 * PHYS.jump / PHYS.gravity * PHYS.runMax / TILE;
+  physInfo.textContent = `Săritura maximă: cam ${jh.toFixed(1)} blocuri în sus. Distanța pe teren plat, fără planare: cam ${jd.toFixed(1)} blocuri.`;
+  physOut.textContent = JSON.stringify(PHYS);
+}
+const inputs = {};
+SLIDERS.forEach(([k, label, min, max, step]) => {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<label for="s_${k}">${label}</label><output id="o_${k}"></output><input type="range" id="s_${k}" min="${min}" max="${max}" step="${step}">`;
+  grid.appendChild(row);
+  const inp = row.querySelector('input'), o = row.querySelector('output');
+  inp.value = PHYS[k] === Infinity ? inp.max : PHYS[k]; o.textContent = fmt(PHYS[k]);
+  inp.addEventListener('input', () => { PHYS[k] = parseFloat(inp.value); o.textContent = fmt(PHYS[k]); refreshPhys(); });
+  inp.addEventListener('change', () => inp.blur());
+  inputs[k] = { inp, o };
+});
+document.getElementById('resetPhys').addEventListener('click', e => {
+  Object.assign(PHYS, DEFAULTS);
+  for (const k in inputs) { inputs[k].inp.value = PHYS[k] === Infinity ? inputs[k].inp.max : PHYS[k]; inputs[k].o.textContent = fmt(PHYS[k]); }
+  refreshPhys(); e.currentTarget.blur();
+});
+document.getElementById('copyPhys').addEventListener('click', e => {
+  const btn = e.currentTarget;
+  const done = ok => { btn.textContent = ok ? 'Copiat' : 'Selectează textul de mai jos'; setTimeout(() => btn.textContent = 'Copiază valorile', 1600); };
+  if (navigator.clipboard) navigator.clipboard.writeText(physOut.textContent).then(() => done(true), () => done(false));
+  else done(false);
+  btn.blur();
+});
+
+const godModeBtn = document.getElementById('godModeBtn');
+const godInfo = document.getElementById('godInfo');
+
+function refreshGodModeUI() {
+  godModeBtn.textContent = godMode ? 'GOD Mode: PORNIT' : 'GOD Mode: OPRIT';
+  godModeBtn.setAttribute('aria-pressed', godMode ? 'true' : 'false');
+  godInfo.textContent = godMode
+    ? 'GOD Mode activ: nu poți fi omorât și ai arme infinite.'
+    : 'GOD Mode dezactivat.';
+}
+
+godModeBtn.addEventListener('click', e => {
+  godMode = !godMode;
+  if (godMode) {
+    hearts = MAXH;
+    deaths = 0;
+    if (player) {
+      player.weapon = persistentGodWeapon();
+      player.inv = 0;
+      player.hurtT = 0;
+      player.glideLeft = Infinity;
+    }
+    showToast('GOD Mode activ: invincibil + arme infinite', 2.8);
+  } else {
+    showToast('GOD Mode dezactivat', 1.8);
+  }
+  refreshGodModeUI();
+  e.currentTarget.blur();
+});
+
+refreshGodModeUI();
+refreshPhys();
+
+// ============================================================
+//  Bucla principală
+// ============================================================
+resetLevel();
+let last = performance.now(), acc = 0;
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  dt = clamp(dt, 0, 0.1);
+  anim += dt;
+  if (state !== 'title' && !paused) {
+    acc += dt;
+    let n = 0;
+    while (acc >= STEP && n < 20) { update(STEP); acc -= STEP; n++; }
+  } else acc = 0;
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+window.__steve = {
+  update, resetLevel, nextLevel, setLevel(n) { level = n; resetLevel(); state = 'play'; }, keys, edges, PHYS,
+  get player() { return player; }, get state() { return state; }, set state(v) { state = v; },
+  get tiles() { return tiles; }, get items() { return items; }, get enemies() { return enemies; },
+  get hearts() { return hearts; }, get coins() { return coins; }, get deaths() { return deaths; }, render
+};
+})();
+</script>
+</body>
+</html>
